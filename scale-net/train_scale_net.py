@@ -15,15 +15,13 @@ from tqdm import tqdm
 import os
 import random
 from typing import Optional, Dict, Tuple
+from seed_utils import seed_everything
 
 # Import from dataset.py
 from dataset import (
     load_dataset, 
     TASK_CONFIGS, 
-    EEGDataset, 
-    apply_stft_transform,
     create_dataloaders,
-    get_stft_dimensions
 )
 
 # ==================== SE Block ====================
@@ -241,8 +239,18 @@ def train_epoch(model, loader, criterion, optimizer, device, is_binary=False):
     
     pbar = tqdm(loader, desc='Train', ncols=100)
     for inputs, labels in pbar:
-        inputs, labels = inputs.to(device), labels.to(device)
-        
+        # inputs, labels = inputs.to(device), labels.to(device)
+
+        if isinstance(inputs, list):
+            # Move each tensor in the list to the device
+            inputs = [x.to(device) for x in inputs]
+            # Since your model expects spectral data, use the second element (STFT)
+            inputs = inputs[1] 
+        else:
+            inputs = inputs.to(device)
+            
+        labels = labels.to(device)
+
         # Convert labels for binary classification
         if is_binary:
             labels_float = labels.float().unsqueeze(1)  # (B,) → (B, 1) for BCEWithLogitsLoss
@@ -281,8 +289,17 @@ def evaluate(model, loader, device, criterion=None, is_binary=False):
     
     with torch.no_grad():
         for inputs, labels in tqdm(loader, desc='Eval', ncols=100):
-            inputs, labels = inputs.to(device), labels.to(device)
-            
+            # inputs, labels = inputs.to(device), labels.to(device)
+            if isinstance(inputs, list):
+                # Move each tensor in the list to the device
+                inputs = [x.to(device) for x in inputs]
+                # Since your model expects spectral data, use the second element (STFT)
+                inputs = inputs[1] 
+            else:
+                inputs = inputs.to(device)
+                
+            labels = labels.to(device)
+
             # Convert labels for binary classification
             if is_binary:
                 labels_float = labels.float().unsqueeze(1)  # (B,) → (B, 1) for BCEWithLogitsLoss
@@ -367,6 +384,9 @@ def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[st
         config.setdefault('use_hidden_layer', False)
         config.setdefault('hidden_dim', 64)
         config.setdefault('scheduler', 'ReduceLROnPlateau')  # Default scheduler
+
+    seed = config.get('seed', 44)
+    seed_everything(seed, deterministic=True)
     
     # Setup device and multi-GPU
     device, n_gpus = setup_device()
@@ -408,7 +428,8 @@ def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[st
         stft_config, 
         batch_size=config['batch_size'],
         num_workers=4,
-        augment_train=True
+        augment_train=True,
+        seed=seed
     )
     
     train_loader = loaders['train']
@@ -418,7 +439,7 @@ def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[st
     
     # Get dimensions from a sample
     sample_x, _ = next(iter(train_loader))
-    _, n_channels, freq_bins, time_bins = sample_x.shape
+    _, n_channels, freq_bins, time_bins = sample_x[1].shape
     print(f"STFT shape: ({n_channels}, {freq_bins}, {time_bins})")
     
     # ====== Create Model ======
@@ -565,7 +586,7 @@ def train_all_tasks(tasks: Optional[list] = None, save_dir: str = './checkpoints
         Dictionary of results for each task
     """
     if tasks is None:
-        tasks = ['SSVEP', 'P300', 'MI', 'Imagined_speech']
+        tasks = ['SSVEP', 'P300', 'MI', 'Imagined_speech', 'Lee2019_MI', 'Lee2019_SSVEP', 'BNCI2014_P300']
     
     os.makedirs(save_dir, exist_ok=True)
     
@@ -632,7 +653,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description='Train ChannelWiseSpectralCLDNN on EEG tasks')
     parser.add_argument('--task', type=str, default='SSVEP',
-                        choices=['SSVEP', 'P300', 'MI', 'Imagined_speech', 'all'],
+                        choices=['SSVEP', 'P300', 'MI', 'Imagined_speech', 'Lee2019_MI', 'Lee2019_SSVEP', 'BNCI2014_P300', 'all'],
                         help='Task to train on (default: SSVEP)')
     parser.add_argument('--save_dir', type=str, default='./checkpoints',
                         help='Directory to save model checkpoints')

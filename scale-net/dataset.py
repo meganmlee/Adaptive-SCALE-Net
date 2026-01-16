@@ -14,6 +14,7 @@ from scipy import signal
 from collections import defaultdict
 from typing import Dict, Tuple, Optional, List
 import pandas as pd
+import scipy.io
 
 try:
     import mne
@@ -36,21 +37,51 @@ TASK_CONFIGS = {
         "stft_noverlap": 112,
         "stft_nfft": 512,
     },
+    "Lee2019_SSVEP": {
+        "num_classes": 4,
+        "num_subjects": 54,
+        "num_seen": 40,
+        "data_dir": "/ocean/projects/cis250213p/shared/lee2019_ssvep_processed",
+        "sampling_rate": 250,
+        "stft_nperseg": 128,
+        "stft_noverlap": 112,
+        "stft_nfft": 512,
+    },
     "P300": {
         "num_classes": 2,
         "num_subjects": 43,
         "num_seen": 36,
         "data_dir": "/ocean/projects/cis250213p/shared/p300",
         "sampling_rate": 256,
-        "stft_nperseg": 64,
-        "stft_noverlap": 56,
-        "stft_nfft": 256,
+        "stft_nperseg": 256,
+        "stft_noverlap": 240,
+        "stft_nfft": 512,
+    },
+    "BNCI2014_P300": {
+        "num_classes": 2,
+        "num_subjects": 10,
+        "num_seen": 7,
+        "data_dir": "/ocean/projects/cis250213p/shared/bnci2014_p300_processed",
+        "sampling_rate": 512,
+        "stft_nperseg": 256,
+        "stft_noverlap": 240,
+        "stft_nfft": 512,
     },
     "MI": {
         "num_classes": 4,
         "num_subjects": 9,
         "num_seen": 7,
         "data_dir": "/ocean/projects/cis250213p/shared/mi",
+        "sampling_rate": 250,
+        "stft_nperseg": 128,
+        "stft_noverlap": 112,
+        "stft_nfft": 512,
+    },
+    "Lee2019_MI": {
+        "num_classes": 2,
+        "num_subjects": 54,
+        "num_seen": 40,
+        "data_dir": "/ocean/projects/cis250213p/shared/lee2019_mi_processed",
         "sampling_rate": 250,
         "stft_nperseg": 128,
         "stft_noverlap": 112,
@@ -65,9 +96,8 @@ TASK_CONFIGS = {
         "stft_nperseg": 256,
         "stft_noverlap": 224,
         "stft_nfft": 512,
-    }
+    },
 }
-
 
 # ==================== STFT Transformation ====================
 
@@ -100,7 +130,7 @@ def apply_stft_transform(data, fs=250, nperseg=128, noverlap=112, nfft=512):
                 data[sample_idx, ch, :],
                 fs=fs, nperseg=nperseg, noverlap=noverlap, nfft=nfft
             )
-            power = np.abs(Zxx) ** 2  # Power spectrogram (no log compression)
+            power = np.abs(Zxx) ** 2
             channels_stft.append(power)
         stft_data.append(np.stack(channels_stft, axis=0))
     
@@ -110,7 +140,75 @@ def apply_stft_transform(data, fs=250, nperseg=128, noverlap=112, nfft=512):
         return stft_data[0]
     return stft_data
 
+# ==================== MI Lee2019 Data Loading ====================
 
+def load_lee2019_data(data_dir: str, num_seen: int = 40, seed: int = 44) -> Dict:
+
+    all_subjects = list(range(1, 55)) # 54 subjects total
+    
+    random.seed(seed)
+    seen_subjects = random.sample(all_subjects, num_seen)
+    unseen_subjects = [s for s in all_subjects if s not in seen_subjects]
+
+    X_train, y_train = [], []
+    X_val, y_val = [], []
+    X_test1, y_test1 = [], [] 
+    X_test2, y_test2 = [], [] 
+
+    print(f"Source Directory: {data_dir}")
+
+    # 2. Load Seen Subjects (Split into Train/Val/Test1)
+    for sid in seen_subjects:
+        file_path = os.path.join(data_dir, f"S{sid}_preprocessed.npz")
+        
+        if not os.path.exists(file_path):
+            print(f"  [WARNING] Preprocessed file for Subject {sid} not found.")
+            continue
+            
+        with np.load(file_path) as data:
+            X = data['X'] # Shape: (Total_Trials, 22, 1000)
+            y = data['y'] # Shape: (Total_Trials,)
+            
+            # Since we combined sessions in preprocessing, we split by trial index
+            # Standard 70/15/15 split for the seen subject's data
+            n_trials = len(X)
+            train_split = int(n_trials * 0.7)
+            val_split = int(n_trials * 0.85)
+            
+            X_train.append(X[:train_split])
+            y_train.append(y[:train_split])
+            
+            X_val.append(X[train_split:val_split])
+            y_val.append(y[train_split:val_split])
+            
+            X_test1.append(X[val_split:])
+            y_test1.append(y[val_split:])
+
+    # 3. Load Unseen Subjects (Test2)
+    for sid in unseen_subjects:
+        file_path = os.path.join(data_dir, f"S{sid}_preprocessed.npz")
+        if os.path.exists(file_path):
+            with np.load(file_path) as data:
+                X_test2.append(data['X'])
+                y_test2.append(data['y'])
+
+    # 4. Final Concatenation
+    result = {}
+    splits = [
+        ('train', X_train, y_train),
+        ('val', X_val, y_val),
+        ('test1', X_test1, y_test1),
+        ('test2', X_test2, y_test2)
+    ]
+
+    for name, X_list, y_list in splits:
+        if X_list:
+            result[name] = (np.concatenate(X_list, axis=0), np.concatenate(y_list, axis=0))
+            print(f"  Loaded {name}: {result[name][0].shape}")
+        else:
+            print(f"  [ERROR] {name} split is empty!")
+
+    return result
 # ==================== SSVEP Data Loading ====================
 
 def load_ssvep_data(data_dir: str, num_seen: int = 33, seed: int = 44) -> Dict:
@@ -241,7 +339,7 @@ def _P300_split_repetitions(subject_data: Dict, min_reps: int = 3) -> Tuple[List
     return train_idx, val_idx, test_idx
 
 
-def load_p300_data(data_dir: str, num_seen: int = 36, seed: int = 43) -> Dict:
+def load_p300_data(data_dir: str, num_seen: int = 36, seed: int = 44) -> Dict:
     """
     Load P300 dataset with proper split
     
@@ -396,7 +494,7 @@ def _MI_split_by_class_and_run(Y: torch.Tensor, seed: int = 44,
     return train_idx, val_idx, test_idx
 
 
-def load_mi_data(data_dir: str, num_seen: int = 7, seed: int = 43) -> Dict:
+def load_mi_data(data_dir: str, num_seen: int = 7, seed: int = 44) -> Dict:
     """
     Load MI dataset with proper split
     
@@ -505,7 +603,7 @@ def _ImaginedSpeech_split_repetitions(subject_data: Dict) -> Tuple[List, List, L
     return train_idx, val_idx, test_idx
 
 
-def load_imagined_speech_data(data_dir: str, num_seen: int = 8, seed: int = 43) -> Dict:
+def load_imagined_speech_data(data_dir: str, num_seen: int = 8, seed: int = 44) -> Dict:
     """
     Load Imagined Speech dataset with proper split
     
@@ -589,7 +687,7 @@ def load_imagined_speech_data(data_dir: str, num_seen: int = 8, seed: int = 43) 
 # ==================== Unified Data Loader ====================
 
 def load_dataset(task: str, data_dir: Optional[str] = None, 
-                 num_seen: Optional[int] = None, seed: int = 43) -> Dict:
+                 num_seen: Optional[int] = None, seed: int = 44) -> Dict:
     """
     Unified data loader for all EEG tasks
     
@@ -621,6 +719,12 @@ def load_dataset(task: str, data_dir: Optional[str] = None,
         return load_mi_data(data_dir, num_seen, seed)
     elif task == "Imagined_speech":
         return load_imagined_speech_data(data_dir, num_seen, seed)
+    elif task == "Lee2019_MI":
+        return load_lee2019_data(data_dir, num_seen, seed)
+    elif task == "Lee2019_SSVEP":
+        return load_lee2019_data(data_dir, num_seen, seed)
+    elif task == "BNCI2014_P300":
+        return load_bnci_p300(data_dir, num_seen, seed)
     else:
         raise ValueError(f"Unknown task: {task}")
 
@@ -692,27 +796,28 @@ class EEGDataset(Dataset):
         return x
     
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        x = self.data[idx].copy()
+        x_raw = self.data[idx].copy()
         y = self.labels[idx]
         
-        # Raw augmentation
+        # RAW Augmentation (applied to x_raw before STFT)
         if self.augment:
-            x = self._augment_raw(x)
+            x_raw = self._augment_raw(x_raw)
         
         # STFT transform
-        x = apply_stft_transform(x, **self.stft_config)
+        x_stft = apply_stft_transform(x_raw, **self.stft_config)
         
         # STFT augmentation
         if self.augment:
-            x = self._augment_stft(x)
+            x_stft = self._augment_stft(x_stft)
         
-        # Normalize (per-channel z-score)
+        # Normalize STFT (per-channel z-score)
         if self.normalize:
-            mean = x.mean(axis=(1, 2), keepdims=True)
-            std = x.std(axis=(1, 2), keepdims=True) + 1e-8
-            x = (x - mean) / std
+            mean = x_stft.mean(axis=(1, 2), keepdims=True)
+            std = x_stft.std(axis=(1, 2), keepdims=True) + 1e-8
+            x_stft = (x_stft - mean) / std
         
-        return torch.FloatTensor(x), y
+        # Return a tuple of (Raw, STFT) data
+        return (torch.FloatTensor(x_raw), torch.FloatTensor(x_stft)), y
 
 
 # ==================== Helper Functions ====================
@@ -733,7 +838,7 @@ def get_stft_dimensions(data_sample: np.ndarray, stft_config: Dict) -> Tuple[int
 
 
 def create_dataloaders(datasets: Dict, stft_config: Dict, batch_size: int = 32, 
-                       num_workers: int = 4, augment_train: bool = True) -> Dict:
+                       num_workers: int = 4, augment_train: bool = True, seed: int = 44) -> Dict:
     """
     Create DataLoaders for all splits
     
@@ -743,11 +848,13 @@ def create_dataloaders(datasets: Dict, stft_config: Dict, batch_size: int = 32,
         batch_size: Batch size
         num_workers: Number of workers for DataLoader
         augment_train: Whether to augment training data
+        seed: seed for shuffling
         
     Returns:
         Dictionary of DataLoaders
     """
     from torch.utils.data import DataLoader
+    from seed_utils import worker_init_fn, get_generator
     
     loaders = {}
     
@@ -761,7 +868,9 @@ def create_dataloaders(datasets: Dict, stft_config: Dict, batch_size: int = 32,
             batch_size=batch_size, 
             shuffle=shuffle,
             num_workers=num_workers, 
-            pin_memory=True
+            pin_memory=True,
+            worker_init_fn=lambda worker_id: worker_init_fn(worker_id, seed),
+            generator=get_generator(seed) if shuffle else None
         )
     
     return loaders
@@ -799,5 +908,43 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Imagined Speech loading failed: {e}")
 
+    # Test Lee2019 MI
+    try:
+        lee2019_mi_data = load_dataset("Lee2019_MI")
+        print(f"Lee2019 MI loaded successfully!")
+    except Exception as e:
+        print(f"Lee2019 MI loading failed: {e}")
+
+    # Test Lee2019 SSVEP
+    try:
+        lee2019_ssvep_data = load_dataset("Lee2019_SSVEP")
+        print(f"Lee2019 SSVEP loaded successfully!")
+    except Exception as e:
+        print(f"Lee2019 SSVEP loading failed: {e}")
+
+    # Test BNCI2014 P300
+    try:
+        bnci2014_p300_data = load_dataset("BNCI2014_P300")
+        print(f"BNCI2014 P300 loaded successfully!")
+    except Exception as e:
+        print(f"BNCI2014 P300 loading failed: {e}")
+
+    # from moabb.datasets import Lee2019_SSVEP
+    # import mne
+
+    # # Force the configuration here
+    # shared_data_path = '/ocean/projects/cis250213p/shared/mne_data'
+    # mne.set_config('MNE_DATA', shared_data_path)
+    # dataset = Lee2019_SSVEP()
+    # dataset.download(path=shared_data_path)
+
+    # from moabb.datasets import BNCI2014_009
+    # import mne
+
+    # # Force the configuration here
+    # shared_data_path = '/ocean/projects/cis250213p/shared/mne_data'
+    # mne.set_config('MNE_DATA', shared_data_path)
+    # dataset = BNCI2014_009()
+    # dataset.download(path=shared_data_path)
 
 

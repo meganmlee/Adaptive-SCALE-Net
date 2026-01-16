@@ -8,22 +8,19 @@ Based on the working implementation from spectral_cnn_lstm notebooks
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
 import numpy as np
-from scipy import signal
 from tqdm import tqdm
 import os
-import random
+import pandas as pd
 from typing import Optional, Dict, Tuple
+from seed_utils import seed_everything
 
 # Import from dataset.py
 from dataset import (
     load_dataset, 
     TASK_CONFIGS, 
     EEGDataset, 
-    apply_stft_transform,
     create_dataloaders,
-    get_stft_dimensions
 )
 
 # ==================== SE Block ====================
@@ -86,7 +83,7 @@ class AttentionFusion(nn.Module):
         
         # Weighted sum (Fusion)
         fused = (w_spec * feat_spec) + (w_time * feat_time)
-        return fused
+        return fused, weights
 
 class ChannelWiseSpectralCLDNN_Dual(nn.Module):
     """
@@ -237,7 +234,7 @@ class ChannelWiseSpectralCLDNN_Dual(nn.Module):
         x_global_expanded = x_global.unsqueeze(1).expand(-1, C, -1) # (B, C, time_out_dim)
         
         # Apply Attention Fusion
-        features = self.fusion_layer(x_spec, x_global_expanded) # (B, C, lstm_hidden)
+        features, weights = self.fusion_layer(x_spec, x_global_expanded) # (B, C, lstm_hidden)
         
         # Add Position Embeddings (Transformer style addition)
         if chan_ids is None:
@@ -253,7 +250,7 @@ class ChannelWiseSpectralCLDNN_Dual(nn.Module):
         if self.use_hidden_layer:
             h = self.hidden_layer(h)
         
-        return self.classifier(h)
+        return self.classifier(h), weights
 
 # ==================== Multi-GPU Setup ====================
 
@@ -304,7 +301,7 @@ def train_epoch(model, loader, criterion, optimizer, device, is_binary=False):
             labels_float = labels
         
         optimizer.zero_grad()
-        outputs = model(x_time, x_spec)
+        outputs, _ = model(x_time, x_spec)
         loss = criterion(outputs, labels_float)
         
         loss.backward()
@@ -344,7 +341,7 @@ def evaluate(model, loader, device, criterion=None, is_binary=False):
             else:
                 labels_float = labels
             
-            outputs = model(x_time, x_spec)
+            outputs, _ = model(x_time, x_spec)
             if criterion is not None:
                 loss = criterion(outputs, labels_float)
                 total_loss += loss.item()
@@ -364,6 +361,24 @@ def evaluate(model, loader, device, criterion=None, is_binary=False):
 
 
 # ==================== Main Training ====================
+def collect_weights(model, loader, device):
+    """
+    Runs an evaluation pass and collects the attention weights for every trial.
+    """
+    model.eval()
+    all_weights = []
+    
+    with torch.no_grad():
+        for inputs, _ in tqdm(loader, desc='Collecting Weights', ncols=100):
+            x_time, x_spec = inputs
+            x_time, x_spec = x_time.to(device), x_spec.to(device)
+            
+            # Outputs is a 2-tuple, we only care about the second element (weights)
+            _, weights = model(x_time, x_spec) 
+            
+            all_weights.append(weights.cpu().numpy())
+    
+    return np.concatenate(all_weights, axis=0)
 
 def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[str] = None) -> Tuple:
     """
@@ -422,6 +437,9 @@ def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[st
         config.setdefault('use_hidden_layer', False)
         config.setdefault('hidden_dim', 64)
         config.setdefault('scheduler', 'ReduceLROnPlateau')  # Default scheduler
+
+    seed = config.get('seed', 44)
+    seed_everything(seed, deterministic=True)
     
     # Setup device and multi-GPU
     device, n_gpus = setup_device()
@@ -463,7 +481,8 @@ def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[st
         stft_config, 
         batch_size=config['batch_size'],
         num_workers=4,
-        augment_train=True
+        augment_train=True,
+        seed=seed,
     )
     
     train_loader = loaders['train']
@@ -607,6 +626,40 @@ def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[st
     if 'test2' in results:
         print(f"Test2 (Unseen):  {results['test2']:.2f}% (loss {results['test2_loss']:.4f})")
     print(f"{'='*70}")
+
+    # ====== COLLECT AND SAVE ATTENTION WEIGHTS ======
+    print(f"\n{'='*70}")
+    print(f"Collecting attention weights for {task}...")
+    
+    # Use the Test 2 (Unseen) loader if available, otherwise use Val loader
+    weights_loader = test2_loader if test2_loader else val_loader
+    weights_type = 'unseen' if test2_loader else 'val'
+    
+    if weights_loader:
+        # Note: You must ensure the model is on device and unwrapped for this call,
+        # or handle DataParallel inside the collect_weights if necessary.
+        # Since 'model' is already loaded and on the device, we proceed:
+        
+        all_weights_array = collect_weights(model, weights_loader, device)
+        
+        # Convert to DataFrame and save
+        weights_df = pd.DataFrame(
+            all_weights_array, 
+            columns=['Spectral_Weight', 'Temporal_Weight']
+        )
+        
+        csv_filename = f'{task.lower()}_attention_weights_{weights_type}.csv'
+        weights_df.to_csv(csv_filename, index=False)
+        
+        # Calculate and print mean for sanity check
+        mean_spec = weights_df['Spectral_Weight'].mean()
+        mean_time = weights_df['Temporal_Weight'].mean()
+        
+        print(f"✓ Attention weights (N={len(weights_df)}) saved to: {csv_filename}")
+        print(f"  Mean Spectral Weight: {mean_spec:.4f}")
+        print(f"  Mean Temporal Weight: {mean_time:.4f}")
+
+    print(f"{'='*70}")
     
     return model, results
 
@@ -623,7 +676,7 @@ def train_all_tasks(tasks: Optional[list] = None, save_dir: str = './checkpoints
         Dictionary of results for each task
     """
     if tasks is None:
-        tasks = ['SSVEP', 'P300', 'MI', 'Imagined_speech']
+        tasks = ['SSVEP', 'P300', 'MI', 'Imagined_speech', 'Lee2019_MI', 'Lee2019_SSVEP', 'BNCI2014_P300']
     
     os.makedirs(save_dir, exist_ok=True)
     
@@ -690,7 +743,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description='Train ChannelWiseSpectralCLDNN on EEG tasks')
     parser.add_argument('--task', type=str, default='SSVEP',
-                        choices=['SSVEP', 'P300', 'MI', 'Imagined_speech', 'all'],
+                        choices=['SSVEP', 'P300', 'MI', 'Imagined_speech', 'Lee2019_MI', 'Lee2019_SSVEP', 'BNCI2014_P300', 'all'],
                         help='Task to train on (default: SSVEP)')
     parser.add_argument('--save_dir', type=str, default='./checkpoints',
                         help='Directory to save model checkpoints')

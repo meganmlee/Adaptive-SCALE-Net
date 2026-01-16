@@ -15,15 +15,13 @@ from tqdm import tqdm
 import os
 import random
 from typing import Optional, Dict, Tuple
+from seed_utils import seed_everything
 
 # Import from dataset.py
 from dataset import (
     load_dataset, 
     TASK_CONFIGS, 
-    EEGDataset, 
-    apply_stft_transform,
     create_dataloaders,
-    get_stft_dimensions
 )
 
 # ==================== SE Block ====================
@@ -391,6 +389,9 @@ def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[st
         config.setdefault('use_hidden_layer', False)
         config.setdefault('hidden_dim', 64)
         config.setdefault('scheduler', 'ReduceLROnPlateau')  # Default scheduler
+
+    seed = config.get('seed', 44)
+    seed_everything(seed, deterministic=True)
     
     # Setup device and multi-GPU
     device, n_gpus = setup_device()
@@ -432,7 +433,8 @@ def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[st
         stft_config, 
         batch_size=config['batch_size'],
         num_workers=4,
-        augment_train=True
+        augment_train=True,
+        seed=seed
     )
     
     train_loader = loaders['train']
