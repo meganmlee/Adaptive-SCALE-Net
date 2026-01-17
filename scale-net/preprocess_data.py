@@ -110,13 +110,13 @@ def preprocess_lee2019_ssvep(raw_dir, save_dir, subjects=range(1, 55), skip_exis
             np.savez(save_path, X=np.array(sub_x), y=np.array(sub_y))
             print(f"  Saved Subject {sid} | Shape: {np.array(sub_x).shape}")
 
-# Update paths accordingly
+# --- RUN EXECUTION ---
+
 RAW_SSVEP = '/ocean/projects/cis250213p/shared/mne_data/MNE-lee2019-ssvep-data/gigadb-datasets/live/pub/10.5524/100001_101000/100542'
 PROCESSED_SSVEP = '/ocean/projects/cis250213p/shared/lee2019_ssvep_processed'
 
 preprocess_lee2019_ssvep(RAW_SSVEP, PROCESSED_SSVEP)
 
-# --- RUN EXECUTION ---
 # RAW = '/ocean/projects/cis250213p/shared/lee2019_mi'
 # PROCESSED = '/ocean/projects/cis250213p/shared/lee2019_processed'
 # PLOTS = '/ocean/projects/cis250213p/shared/lee2019_plots'

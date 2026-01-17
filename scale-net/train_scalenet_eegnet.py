@@ -671,6 +671,8 @@ if __name__ == "__main__":
                         help='Batch size')
     parser.add_argument('--lr', type=float, default=1e-3,
                         help='Learning rate')
+    parser.add_argument('--seed', type=int, default=44,
+                        help='Random seed for reproducibility')
     
     args = parser.parse_args()
     
@@ -690,7 +692,7 @@ if __name__ == "__main__":
         'weight_decay': 1e-4,
         'patience': 15,
         'scheduler': 'ReduceLROnPlateau',
-        'seed': 44,
+        'seed': args.seed,
     }
     
     if args.task == 'all':

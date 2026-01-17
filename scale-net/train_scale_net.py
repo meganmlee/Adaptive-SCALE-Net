@@ -391,7 +391,7 @@ def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[st
     # Setup device and multi-GPU
     device, n_gpus = setup_device()
     print(f"\n{'='*70}")
-    print(f"ChannelWiseSpectralCLDNN - {task} Classification")
+    print(f"{task} Classification")
     print(f"{'='*70}")
     print(f"Device: {device}, GPUs: {n_gpus}")
     
@@ -663,6 +663,8 @@ if __name__ == "__main__":
                         help='Batch size')
     parser.add_argument('--lr', type=float, default=1e-3,
                         help='Learning rate')
+    parser.add_argument('--seed', type=int, default=44,
+                        help='Random seed for reproducibility')
     
     args = parser.parse_args()
     
@@ -682,7 +684,7 @@ if __name__ == "__main__":
         'weight_decay': 1e-4,
         'patience': 15,
         'scheduler': 'ReduceLROnPlateau',
-        'seed': 44,
+        'seed': args.seed,
     }
     
     if args.task == 'all':

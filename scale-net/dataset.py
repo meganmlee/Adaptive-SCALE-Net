@@ -61,7 +61,7 @@ TASK_CONFIGS = {
         "num_classes": 2,
         "num_subjects": 10,
         "num_seen": 7,
-        "data_dir": "/ocean/projects/cis250213p/shared/bnci2014_p300_processed",
+        "data_dir": "/ocean/projects/cis250213p/shared/bnci2014_p300",
         "sampling_rate": 512,
         "stft_nperseg": 256,
         "stft_noverlap": 240,
@@ -412,6 +412,103 @@ def load_p300_data(data_dir: str, num_seen: int = 36, seed: int = 44) -> Dict:
 
     return datasets
 
+def load_bnci_p300(data_dir: str, num_seen: int = 7, seed: int = 44) -> Dict:
+
+    random.seed(seed)
+    np.random.seed(seed)
+    
+    # 1. Subject-level split (Seen vs. Unseen)
+    # BNCI2014-009 has 10 subjects: A01S.mat to A10S.mat
+    all_subjects = list(range(1, 11)) 
+    random.shuffle(all_subjects)
+    seen_subjects = all_subjects[:num_seen]
+    unseen_subjects = [s for s in all_subjects if s not in seen_subjects]
+
+    X_train, y_train = [], []
+    X_val, y_val = [], []
+    X_test1, y_test1 = [], [] # Test split for seen subjects
+    X_test2, y_test2 = [], [] # Test split for unseen subjects
+
+    for sid in all_subjects:
+        file_path = os.path.join(data_dir, f"A{sid:02d}S.mat")
+        
+        if not os.path.exists(file_path):
+            print(f"  [Warning] File NOT found: {file_path}")
+            continue
+        
+        mat = scipy.io.loadmat(file_path, struct_as_record=False, squeeze_me=True)
+        sessions = mat['data'] 
+        if not isinstance(sessions, (list, np.ndarray)):
+            sessions = [sessions]
+        
+        sub_x, sub_y = [], []
+        for sess_idx, session in enumerate(sessions):
+            raw_x = session.X            # (Samples, 16 channels)
+            # Find flash starts: session.y is continuous. 1=Target, 2=Non-Target, 0=None.
+            # We find indices where y > 0 and the previous value was 0.
+            stim_raw = session.y
+            flash_starts = np.where((stim_raw[:-1] == 0) & (stim_raw[1:] > 0))[0] + 1
+            
+            extracted_count = 0
+            for start in flash_starts:
+                # BNCI Label Mapping: 1 (Target) -> 1, 2 (Non-Target) -> 0
+                label = 1 if stim_raw[start] == 1 else 0
+                
+                # Extract 1s window @ 256Hz (256 samples)
+                end = start + 256 
+                if end <= raw_x.shape[0]:
+                    trial = raw_x[start:end, :].T # (16, 256)
+                    
+                    # Resample to 512 samples to match the 512Hz Task Config
+                    # This ensures consistency with your STFT parameters
+                    trial = signal.resample(trial, 512, axis=-1)
+                    
+                    sub_x.append(trial.astype(np.float32))
+                    sub_y.append(label)
+                    extracted_count += 1
+
+        if not sub_x:
+            continue
+
+        # 2. Intra-subject split (Matching your 60/20/20 logic)
+        X_sub = np.array(sub_x)
+        y_sub = np.array(sub_y)
+        
+        # Shuffle trials within subject before splitting
+        indices = np.arange(len(X_sub))
+        np.random.shuffle(indices)
+        X_sub, y_sub = X_sub[indices], y_sub[indices]
+        
+        if sid in seen_subjects:
+            n = len(X_sub)
+            itrain, ival = int(n * 0.6), int(n * 0.8)
+            
+            X_train.append(X_sub[:itrain])
+            y_train.append(y_sub[:itrain])
+            X_val.append(X_sub[itrain:ival])
+            y_val.append(y_sub[itrain:ival])
+            X_test1.append(X_sub[ival:])
+            y_test1.append(y_sub[ival:])
+        else:
+            # Entire subject held out for zero-shot testing
+            X_test2.append(X_sub)
+            y_test2.append(y_sub)
+
+    # 3. Final Concatenation
+    result = {}
+    splits = [
+        ('train', X_train, y_train),
+        ('val', X_val, y_val),
+        ('test1', X_test1, y_test1),
+        ('test2', X_test2, y_test2)
+    ]
+
+    for name, data_list, label_list in splits:
+        if data_list:
+            result[name] = (np.concatenate(data_list, axis=0), np.concatenate(label_list, axis=0))
+            print(f"Final {name} Split: {result[name][0].shape}")
+
+    return result
 
 # ==================== MI (Motor Imagery) Data Loading ====================
 
