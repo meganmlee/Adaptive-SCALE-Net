@@ -58,57 +58,77 @@ def preprocess_lee2019(raw_dir, save_dir, subjects=range(1, 55)):
             print(f"  Saved: {save_path} | Final Shape: {np.array(sub_x).shape}")
 
 def preprocess_lee2019_ssvep(raw_dir, save_dir, subjects=range(1, 55), skip_existing=True):
+    """
+    Refactored Lee2019 Preprocessing for more rigor.
+    
+    Changes:
+    1. Continuous Filtering: Filters the whole session to avoid trial-edge artifacts.
+    2. Harder Window: Reduced from 4.0s to 1.0s (250 samples after downsampling).
+    3. Proper Normalization: Z-score applied per trial.
+    """
     os.makedirs(save_dir, exist_ok=True)
     fs_orig = 1000
     fs_new = 250
+    # Window settings (Hard Mode: 1.0s)
+    window_sec = 1.0 
+    window_samples_orig = int(fs_orig * window_sec) # 1000
     chan_idx = list(range(62)) 
 
+    # Design filter once (6-90 Hz)
+    b, a = signal.butter(4, [6, 90], btype='bandpass', fs=fs_orig)
+
     for sid in subjects:
-        # Check if file already exists to avoid redundant processing
-        save_path = os.path.join(save_dir, f"S{sid}_SSVEP_preprocessed.npz")
+        save_path = os.path.join(save_dir, f"S{sid}_preprocessed.npz")
         if skip_existing and os.path.exists(save_path):
             print(f"Skipping Subject {sid}: File already exists.")
             continue
             
         sub_x, sub_y = [], []
-        print(f"Processing Subject {sid} (SSVEP)...")
+        print(f"Processing Subject {sid}...")
         
         for sess in [1, 2]:
             file_path = os.path.join(raw_dir, f'session{sess}', f's{sid}', f'sess{sess:02d}_subj{sid:02d}_EEG_SSVEP.mat')
-            if not os.path.exists(file_path): continue
+            if not os.path.exists(file_path): 
+                continue
             
             mat = scipy.io.loadmat(file_path)
             for key in ['EEG_SSVEP_train', 'EEG_SSVEP_test']:
-                if key not in mat: continue
+                if key not in mat: 
+                    continue
+                    
                 struct = mat[key][0, 0]
-                raw_x = struct['x']          
+                raw_x = struct['x']          # (TotalSamples, Channels)
                 labels = struct['y_dec'].flatten() - 1 
                 timestamps = struct['t'].flatten() 
                 
+                # --- Filter CONTINUOUS data to prevent edge-artifact leakage ---
+                # We filter along the time axis (axis=0)
+                raw_filtered = signal.filtfilt(b, a, raw_x, axis=0)
+
+                # --- Segment filtered data into trials ---
                 for i, start_sample in enumerate(timestamps):
                     start = int(start_sample) - 1
-                    end = start + 4000 
+                    end = start + window_samples_orig 
                     
-                    if end <= raw_x.shape[0]:
-                        trial = raw_x[start:end, chan_idx].T 
+                    if end <= raw_filtered.shape[0]:
+                        # Extract channels and transpose to (Channels, Time)
+                        trial = raw_filtered[start:end, chan_idx].T 
                         
-                        # Bandpass filter (6-90 Hz) per Wang2016 standard
-                        b, a = signal.butter(4, [6, 90], btype='bandpass', fs=fs_orig)
-                        trial = signal.filtfilt(b, a, trial, axis=-1)
-
-                        # Downsample (1000Hz -> 250Hz) to 1000 timepoints
+                        # --- Downsample (1000Hz -> 250Hz) ---
                         num_samples_new = int(trial.shape[-1] * (fs_new / fs_orig))
                         trial = signal.resample(trial, num_samples_new, axis=-1)
                         
-                        # Z-score normalization
+                        # --- Z-score Normalization ---
                         trial = (trial - np.mean(trial)) / (np.std(trial) + 1e-8)
                         
                         sub_x.append(trial.astype(np.float32))
                         sub_y.append(labels[i])
         
         if sub_x:
-            np.savez(save_path, X=np.array(sub_x), y=np.array(sub_y))
-            print(f"  Saved Subject {sid} | Shape: {np.array(sub_x).shape}")
+            X_arr = np.array(sub_x)
+            y_arr = np.array(sub_y)
+            np.savez(save_path, X=X_arr, y=y_arr)
+            print(f"  Saved S{sid} | Shape: {X_arr.shape}")
 
 # --- RUN EXECUTION ---
 

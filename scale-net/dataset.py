@@ -30,7 +30,7 @@ TASK_CONFIGS = {
     "SSVEP": {
         "num_classes": 26,
         "num_subjects": 35,
-        "num_seen": 33,
+        "num_seen": 27,
         "data_dir": "/ocean/projects/cis250213p/shared/ssvep",
         "sampling_rate": 250,
         "stft_nperseg": 128,
@@ -140,9 +140,9 @@ def apply_stft_transform(data, fs=250, nperseg=128, noverlap=112, nfft=512):
         return stft_data[0]
     return stft_data
 
-# ==================== MI Lee2019 Data Loading ====================
+# ==================== Lee2019 MI Data Loading ====================
 
-def load_lee2019_data(data_dir: str, num_seen: int = 40, seed: int = 44) -> Dict:
+def load_lee2019_mi(data_dir: str, num_seen: int = 40, seed: int = 44) -> Dict:
 
     all_subjects = list(range(1, 55)) # 54 subjects total
     
@@ -157,7 +157,7 @@ def load_lee2019_data(data_dir: str, num_seen: int = 40, seed: int = 44) -> Dict
 
     print(f"Source Directory: {data_dir}")
 
-    # 2. Load Seen Subjects (Split into Train/Val/Test1)
+    # Load Seen Subjects (Split into Train/Val/Test1)
     for sid in seen_subjects:
         file_path = os.path.join(data_dir, f"S{sid}_preprocessed.npz")
         
@@ -170,10 +170,10 @@ def load_lee2019_data(data_dir: str, num_seen: int = 40, seed: int = 44) -> Dict
             y = data['y'] # Shape: (Total_Trials,)
             
             # Since we combined sessions in preprocessing, we split by trial index
-            # Standard 70/15/15 split for the seen subject's data
+            # Standard 60/20/20 split for the seen subject's data
             n_trials = len(X)
-            train_split = int(n_trials * 0.7)
-            val_split = int(n_trials * 0.85)
+            train_split = int(n_trials * 0.6)
+            val_split = int(n_trials * 0.8)
             
             X_train.append(X[:train_split])
             y_train.append(y[:train_split])
@@ -184,7 +184,7 @@ def load_lee2019_data(data_dir: str, num_seen: int = 40, seed: int = 44) -> Dict
             X_test1.append(X[val_split:])
             y_test1.append(y[val_split:])
 
-    # 3. Load Unseen Subjects (Test2)
+    # Load Unseen Subjects (Test2)
     for sid in unseen_subjects:
         file_path = os.path.join(data_dir, f"S{sid}_preprocessed.npz")
         if os.path.exists(file_path):
@@ -192,7 +192,7 @@ def load_lee2019_data(data_dir: str, num_seen: int = 40, seed: int = 44) -> Dict
                 X_test2.append(data['X'])
                 y_test2.append(data['y'])
 
-    # 4. Final Concatenation
+    # Final Concatenation
     result = {}
     splits = [
         ('train', X_train, y_train),
@@ -209,19 +209,86 @@ def load_lee2019_data(data_dir: str, num_seen: int = 40, seed: int = 44) -> Dict
             print(f"  [ERROR] {name} split is empty!")
 
     return result
+
+# ==================== Lee2019 SSVEP Data Loading ====================
+
+def load_lee2019_ssvep(data_dir: str, num_seen: int = 40, seed: int = 44) -> Dict:
+    """
+    Load Lee2019 SSVEP data with subject splitting.
+    
+    - Seen Subjects (40): Trials are shuffled and split into Train, Val, and Test1.
+    - Unseen Subjects (14): All trials are put into Test2.
+    
+    This evaluates "Cross-Subject Generalization," which is much harder as the 
+    model must handle inter-subject variability.
+    """
+    all_subjects = list(range(1, 55))  # 54 subjects total
+    random.seed(seed)
+    np.random.seed(seed)
+    
+    # Subject-level split: This is the core of "Unseen Subjects"
+    seen_subjects = random.sample(all_subjects, num_seen)
+    unseen_subjects = [s for s in all_subjects if s not in seen_subjects]
+
+    print(f"[Lee2019_SSVEP] Loading from: {data_dir}")
+    print(f"[Lee2019_SSVEP] Seen subjects (Internal Split): {len(seen_subjects)}")
+    print(f"[Lee2019_SSVEP] Unseen subjects (Entirely New): {len(unseen_subjects)}")
+
+    X_train, y_train = [], []
+    X_val, y_val = [], []
+    X_test1, y_test1 = [], [] 
+    X_test2, y_test2 = [], []
+
+    # Process SEEN subjects: Split their trials into Train/Val/Test1
+    for sid in seen_subjects:
+        file_path = os.path.join(data_dir, f"S{sid}_preprocessed.npz")
+        if not os.path.exists(file_path): continue
+            
+        with np.load(file_path) as data:
+            X, y = data['X'], data['y']
+            
+            t_idx = int(len(X) * 0.6)
+            v_idx = int(len(X) * 0.8)
+            
+            X_train.append(X[:t_idx])
+            y_train.append(y[:t_idx])
+            
+            X_val.append(X[t_idx:v_idx])
+            y_val.append(y[t_idx:v_idx])
+            
+            X_test1.append(X[v_idx:])
+            y_test1.append(y[v_idx:])
+
+    # Process UNSEEN subjects: No trials from these people go into Training
+    for sid in unseen_subjects:
+        file_path = os.path.join(data_dir, f"S{sid}_preprocessed.npz")
+        if os.path.exists(file_path):
+            with np.load(file_path) as data:
+                X_test2.append(data['X'])
+                y_test2.append(data['y'])
+
+    # Final Concatenation
+    result = {}
+    splits = [('train', X_train, y_train), ('val', X_val, y_val), 
+              ('test1', X_test1, y_test1), ('test2', X_test2, y_test2)]
+
+    for name, X_list, y_list in splits:
+        if X_list:
+            result[name] = (np.concatenate(X_list, axis=0), np.concatenate(y_list, axis=0))
+            print(f"  {name}: {result[name][0].shape}")
+
+    return result
+
 # ==================== SSVEP Data Loading ====================
 
-def load_ssvep_data(data_dir: str, num_seen: int = 33, seed: int = 44) -> Dict:
+def load_ssvep_data(data_dir: str, num_seen: int = 27, seed: int = 44) -> Dict:
     """
-    Load SSVEP data with subject-wise split
-    
-    Returns:
-        Dictionary with 'train', 'val', 'test1', 'test2' splits
+    Split Strategy:
+    - Train/Val/Test1: Derived from 'seen_subjects' .
+    - Test2: Entirely 'unseen_subjects'.
     """
     np.random.seed(seed)
     random.seed(seed)
-    
-    print(f"Loading SSVEP data from: {data_dir}")
     
     all_subjects = list(range(1, 36))
     random.shuffle(all_subjects)
@@ -229,58 +296,55 @@ def load_ssvep_data(data_dir: str, num_seen: int = 33, seed: int = 44) -> Dict:
     seen_subjects = all_subjects[:num_seen]
     unseen_subjects = all_subjects[num_seen:]
     
-    print(f"[SSVEP Split] Seen: {len(seen_subjects)} subjects")
-    print(f"[SSVEP Split] Unseen: {unseen_subjects}")
-    
-    train_sessions = [0, 1, 2, 3]
-    val_session = 4
-    test1_session = 5
+    print(f"SSVEP Seen subjects: {len(seen_subjects)}, Unseen: {len(unseen_subjects)}")
     
     X_train, y_train = [], []
     X_val, y_val = [], []
     X_test1, y_test1 = [], []
     X_test2, y_test2 = [], []
     
+    def get_subject_session_data(sid, sessions):
+        filepath = os.path.join(data_dir, f"S{sid}_chars.npy")
+        if not os.path.exists(filepath): return None, None
+        data = np.load(filepath)
+        X, y = [], []
+        for char_idx in range(26):
+            for sess in sessions:
+                X.append(data[char_idx, sess])
+                y.append(char_idx)
+        return np.array(X), np.array(y)
+
+    # Process SEEN subjects (Internal Temporal Split)
     for sid in seen_subjects:
-        filepath = os.path.join(data_dir, f"S{sid}_chars.npy")
-        if not os.path.exists(filepath):
-            continue
-        data = np.load(filepath)
+        # Train: Sessions 0-3
+        X, y = get_subject_session_data(sid, [0, 1, 2, 3])
+        if X is not None: X_train.append(X); y_train.append(y)
         
-        for char_idx in range(26):
-            for sess in train_sessions:
-                X_train.append(data[char_idx, sess])
-                y_train.append(char_idx)
-            X_val.append(data[char_idx, val_session])
-            y_val.append(char_idx)
-            X_test1.append(data[char_idx, test1_session])
-            y_test1.append(char_idx)
-    
+        # Val: Session 4
+        X, y = get_subject_session_data(sid, [4])
+        if X is not None: X_val.append(X); y_val.append(y)
+        
+        # Test1: Session 5 (Same people, different time)
+        X, y = get_subject_session_data(sid, [5])
+        if X is not None: X_test1.append(X); y_test1.append(y)
+
+    # Process UNSEEN subjects (Strict Subject Split)
     for sid in unseen_subjects:
-        filepath = os.path.join(data_dir, f"S{sid}_chars.npy")
-        if not os.path.exists(filepath):
-            continue
-        data = np.load(filepath)
-        
-        for char_idx in range(26):
-            for sess in range(6):
-                X_test2.append(data[char_idx, sess])
-                y_test2.append(char_idx)
+        # Test2: All sessions for brand new people
+        X, y = get_subject_session_data(sid, [0, 1, 2, 3, 4, 5])
+        if X is not None: X_test2.append(X); y_test2.append(y)
     
     datasets = {
-        'train': (np.array(X_train), np.array(y_train)),
-        'val': (np.array(X_val), np.array(y_val)),
-        'test1': (np.array(X_test1), np.array(y_test1)),
-        'test2': (np.array(X_test2), np.array(y_test2))
+        'train': (np.concatenate(X_train), np.concatenate(y_train)),
+        'val': (np.concatenate(X_val), np.concatenate(y_val)),
+        'test1': (np.concatenate(X_test1), np.concatenate(y_test1)),
+        'test2': (np.concatenate(X_test2), np.concatenate(y_test2))
     }
     
-    print(f"  Train: {datasets['train'][0].shape}")
-    print(f"  Val: {datasets['val'][0].shape}")
-    print(f"  Test1 (seen): {datasets['test1'][0].shape}")
-    print(f"  Test2 (unseen): {datasets['test2'][0].shape}")
+    for split in datasets:
+        print(f"  {split}: {datasets[split][0].shape}")
     
     return datasets
-
 
 # ==================== P300 Data Loading ====================
 
@@ -510,6 +574,7 @@ def load_bnci_p300(data_dir: str, num_seen: int = 7, seed: int = 44) -> Dict:
 
     return result
 
+
 # ==================== MI (Motor Imagery) Data Loading ====================
 
 def _MI_load_data_by_session(root_dir: str, subject_id: int) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -650,7 +715,6 @@ def load_mi_data(data_dir: str, num_seen: int = 7, seed: int = 44) -> Dict:
         print(f"  {split}: {datasets[split][0].shape}")
 
     return datasets
-
 
 # ==================== Imagined Speech Data Loading ====================
 
@@ -817,9 +881,9 @@ def load_dataset(task: str, data_dir: Optional[str] = None,
     elif task == "Imagined_speech":
         return load_imagined_speech_data(data_dir, num_seen, seed)
     elif task == "Lee2019_MI":
-        return load_lee2019_data(data_dir, num_seen, seed)
+        return load_lee2019_mi(data_dir, num_seen, seed)
     elif task == "Lee2019_SSVEP":
-        return load_lee2019_data(data_dir, num_seen, seed)
+        return load_lee2019_ssvep(data_dir, num_seen, seed)
     elif task == "BNCI2014_P300":
         return load_bnci_p300(data_dir, num_seen, seed)
     else:
