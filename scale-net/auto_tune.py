@@ -555,7 +555,7 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(
-        description='Auto-tune ChannelWiseSpectralCLDNN with Multi-GPU support',
+        description='Auto-tune SCALENet/AdaptiveSCALENet with Multi-GPU support',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
         

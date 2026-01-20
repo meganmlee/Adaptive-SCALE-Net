@@ -119,7 +119,7 @@ def evaluate_model_from_checkpoint(checkpoint_path: str, task: str) -> Optional[
     try:
         # Import here to avoid circular imports
         sys.path.insert(0, scale_net_path)
-        from train_scale_net import ChannelWiseSpectralCLDNN, evaluate
+        from train_scale_net import SCALENet, evaluate
         from dataset import load_dataset, create_dataloaders
         import torch.nn as nn
         
@@ -181,7 +181,7 @@ def evaluate_model_from_checkpoint(checkpoint_path: str, task: str) -> Optional[
         n_classes = config.get('n_classes', task_config.get('num_classes', 26))
         is_binary = (n_classes == 2)
         
-        model = ChannelWiseSpectralCLDNN(
+        model = SCALENet(
             freq_bins=freq_bins,
             time_bins=time_bins,
             n_channels=n_channels,

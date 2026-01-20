@@ -1,8 +1,8 @@
 """
-ChannelWiseSpectralCLDNN - Baseline Model for Multi-Task EEG Classification
+AdaptiveSCALENet - Adaptive SCALE-Net Model for Multi-Task EEG Classification
 Supports: SSVEP, P300, MI (Motor Imagery), Imagined Speech
 
-Based on the working implementation from spectral_cnn_lstm notebooks
+Dual-stream architecture with adaptive fusion strategies
 """
 
 import torch
@@ -47,9 +47,66 @@ class SqueezeExcitation(nn.Module):
         y = self.excitation(y).view(b, c, 1, 1)
         return x * y.expand_as(x)
 
+class FusionAblations(nn.Module):
+    """
+    Implements 6 strategies for multimodal fusion ablation:
+    1. 'static': Linear equal weighting (0.5/0.5)
+    2. 'global_attention': Trial-level dynamic weighting
+    3. 'spatial_attention': Channel-level dynamic weighting
+    4. 'glu': Gated Linear Unit for noise suppression
+    5. 'multiplicative': Simple element-wise product interaction
+    6. 'bilinear': Full pairwise feature interaction
+    """
+    def __init__(self, mode, dim, n_channels=None, temperature=2.0):
+        super().__init__()
+        self.mode = mode
+        self.dim = dim
+        self.temperature = temperature
+        
+        if mode == 'global_attention' or mode == 'spatial_attention':
+            self.attn = nn.Sequential(nn.Linear(dim*2, dim), nn.ReLU(), nn.Linear(dim, 2))
+        elif mode == 'glu':
+            self.gate = nn.Linear(dim, dim)
+        elif mode == 'multiplicative':
+            self.proj_s = nn.Linear(dim, dim)
+            self.proj_t = nn.Linear(dim, dim)
+        elif mode == 'bilinear':
+            self.bilinear = nn.Bilinear(dim, dim, dim)
+
+    def forward(self, x_s, x_t):
+        if self.mode == 'static':
+            return 0.5 * x_s + 0.5 * x_t, None
+            
+        elif self.mode == 'global_attention':
+            ctx = torch.cat([x_s.mean(1), x_t.mean(1)], dim=-1)
+            attn_logits = self.attn(ctx) / self.temperature
+            w = torch.softmax(attn_logits, dim=-1)
+            return w[:, 0].view(-1, 1, 1) * x_s + w[:, 1].view(-1, 1, 1) * x_t, w
+            
+        elif self.mode == 'spatial_attention':
+            ctx = torch.cat([x_s, x_t], dim=-1)
+            attn_logits = self.attn(ctx) / self.temperature
+            w = torch.softmax(attn_logits, dim=-1)
+            return w[:, :, 0].unsqueeze(-1) * x_s + w[:, :, 1].unsqueeze(-1) * x_t, w
+            
+        elif self.mode == 'glu':
+            combined = x_s + x_t
+            gate_val = torch.sigmoid(self.gate(combined))
+            return combined * gate_val, gate_val
+
+        elif self.mode == 'multiplicative':
+            return self.proj_s(x_s) * self.proj_t(x_t), None
+            
+        elif self.mode == 'bilinear':
+            B, C, D = x_s.shape
+            res = self.bilinear(x_s.view(-1, D), x_t.view(-1, D))
+            return res.view(B, C, D), None
+
+
 class AttentionFusion(nn.Module):
     """
-    Learns to weight the Spectral and Temporal streams dynamically.
+    Legacy attention fusion (equivalent to 'global_attention' with projection).
+    Kept for backward compatibility.
     """
     def __init__(self, spec_dim, time_dim, out_dim):
         super().__init__()
@@ -86,9 +143,11 @@ class AttentionFusion(nn.Module):
         fused = (w_spec * feat_spec) + (w_time * feat_time)
         return fused, weights
 
-class ChannelWiseSpectralCLDNN_Dual(nn.Module):
+class AdaptiveSCALENet(nn.Module):
     """
-    Channel-wise Spectral + Time CLDNN model (Dual Stream)
+    Adaptive SCALE-Net: Dual-stream architecture with adaptive fusion strategies
+    
+    Combines spectral (STFT) and temporal (raw) streams with configurable fusion methods.
     
     Inputs:
         x_time: (B, C, T_raw) - Raw temporal EEG data
@@ -97,7 +156,8 @@ class ChannelWiseSpectralCLDNN_Dual(nn.Module):
     
     def __init__(self, freq_bins, time_bins, n_channels, n_classes, T_raw,
                  cnn_filters=16, lstm_hidden=128, pos_dim=16,
-                 dropout=0.3, cnn_dropout=0.2, use_hidden_layer=False, hidden_dim=64):
+                 dropout=0.3, cnn_dropout=0.2, use_hidden_layer=False, hidden_dim=64,
+                 fusion_mode='global_attention', fusion_temperature=2.0):
         
         super().__init__()
         self.n_channels = n_channels
@@ -155,8 +215,27 @@ class ChannelWiseSpectralCLDNN_Dual(nn.Module):
         final_time_dim = (T_raw // 4) // 8 
         self.time_out_dim = F2 * final_time_dim
 
-        # ====== ATTENTION FUSION ======
-        self.fusion_layer = AttentionFusion(self.spec_out_dim, self.time_out_dim, lstm_hidden)
+        # ====== FEATURE PROJECTION (for fusion) ======
+        # Project both streams to same dimension before fusion
+        self.proj_spec = nn.Linear(self.spec_out_dim, lstm_hidden)
+        self.proj_time = nn.Linear(self.time_out_dim, lstm_hidden)
+
+        # ====== FUSION LAYER ======
+        # Support multiple fusion strategies: 'static', 'global_attention', 'spatial_attention', 
+        # 'glu', 'multiplicative', 'bilinear'
+        # Default: 'global_attention' (equivalent to original AttentionFusion)
+        self.fusion_mode = fusion_mode
+        if fusion_mode == 'legacy' or fusion_mode == 'original':
+            # Use original AttentionFusion for backward compatibility
+            self.fusion_layer = AttentionFusion(self.spec_out_dim, self.time_out_dim, lstm_hidden)
+        else:
+            # Use FusionAblations with projection applied before fusion
+            self.fusion_layer = FusionAblations(
+                mode=fusion_mode, 
+                dim=lstm_hidden, 
+                n_channels=n_channels,
+                temperature=fusion_temperature
+            )
 
         # Channel Position Embedding
         self.chan_emb = nn.Embedding(n_channels, lstm_hidden)
@@ -230,12 +309,20 @@ class ChannelWiseSpectralCLDNN_Dual(nn.Module):
         # Flatten: (B, F2, 1, T_small) -> (B, F2*T_small)
         x_global = x_global.view(B, -1)
         
-        # ====== 3. FEATURE FUSION and LSTM ======
-        # Expand global temporal features to match channel dimension
-        x_global_expanded = x_global.unsqueeze(1).expand(-1, C, -1) # (B, C, time_out_dim)
+        # ====== 3. FEATURE PROJECTION ======
+        # Project both streams to same dimension
+        x_spec_proj = self.proj_spec(x_spec)  # (B, C, lstm_hidden)
+        x_global_expanded = x_global.unsqueeze(1).expand(-1, C, -1)  # (B, C, time_out_dim)
+        x_time_proj = self.proj_time(x_global_expanded)  # (B, C, lstm_hidden)
         
-        # Apply Attention Fusion
-        features, weights = self.fusion_layer(x_spec, x_global_expanded) # (B, C, lstm_hidden)
+        # ====== 4. FEATURE FUSION ======
+        # Apply fusion strategy
+        if self.fusion_mode == 'legacy' or self.fusion_mode == 'original':
+            # Original AttentionFusion (handles projection internally)
+            features, weights = self.fusion_layer(x_spec, x_global_expanded)
+        else:
+            # FusionAblations (projection already applied)
+            features, weights = self.fusion_layer(x_spec_proj, x_time_proj)  # (B, C, lstm_hidden)
         
         # Add Position Embeddings (Transformer style addition)
         if chan_ids is None:
@@ -498,6 +585,8 @@ def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[st
             'cnn_dropout': 0.2,  # Dropout for CNN layers (spatial dropout)
             'use_hidden_layer': False,  # Whether to add hidden dense layer after LSTM
             'hidden_dim': 64,  # Hidden layer dimension if use_hidden_layer=True
+            'fusion_mode': 'global_attention',  # Fusion strategy: 'static', 'global_attention', 'spatial_attention', 'glu', 'multiplicative', 'bilinear', 'legacy'
+            'fusion_temperature': 2.0,  # Temperature for attention-based fusion strategies
             
             # STFT - Use task-specific parameters from TASK_CONFIGS
             'stft_fs': task_config.get('sampling_rate', 250),
@@ -525,6 +614,8 @@ def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[st
         config.setdefault('use_hidden_layer', False)
         config.setdefault('hidden_dim', 64)
         config.setdefault('scheduler', 'ReduceLROnPlateau')  # Default scheduler
+        config.setdefault('fusion_mode', 'global_attention')  # Default fusion strategy
+        config.setdefault('fusion_temperature', 2.0)  # Default temperature for attention
 
     seed = config.get('seed', 44)
     seed_everything(seed, deterministic=True)
@@ -535,6 +626,7 @@ def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[st
     print(f"{task} Classification")
     print(f"{'='*70}")
     print(f"Device: {device}, GPUs: {n_gpus}")
+    print(f"Fusion Mode: {config.get('fusion_mode', 'global_attention')}")
     
     # ====== Load Data ======
     datasets = load_dataset(
@@ -587,7 +679,7 @@ def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[st
     
     # ====== Create Model ======
     n_classes = config['n_classes']
-    model = ChannelWiseSpectralCLDNN_Dual(
+    model = AdaptiveSCALENet(
         freq_bins=freq_bins,
         time_bins=time_bins,
         n_channels=n_channels,
@@ -599,7 +691,9 @@ def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[st
         dropout=config.get('dropout', 0.3),
         cnn_dropout=config.get('cnn_dropout', 0.2),
         use_hidden_layer=config.get('use_hidden_layer', False),
-        hidden_dim=config.get('hidden_dim', 64)
+        hidden_dim=config.get('hidden_dim', 64),
+        fusion_mode=config.get('fusion_mode', 'global_attention'),
+        fusion_temperature=config.get('fusion_temperature', 2.0)
     ).to(device)
     
     n_params = sum(p.numel() for p in model.parameters())
@@ -883,7 +977,7 @@ def train_model(config=None, model_path=None):
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description='Train ChannelWiseSpectralCLDNN on EEG tasks')
+    parser = argparse.ArgumentParser(description='Train AdaptiveSCALENet on EEG tasks')
     parser.add_argument('--task', type=str, default='SSVEP',
                         choices=['SSVEP', 'P300', 'MI', 'Imagined_speech', 'Lee2019_MI', 'Lee2019_SSVEP', 'BNCI2014_P300', 'BI2014b_P300', 'all'],
                         help='Task to train on (default: SSVEP)')
@@ -897,6 +991,11 @@ if __name__ == "__main__":
                         help='Learning rate')
     parser.add_argument('--seed', type=int, default=44,
                         help='Random seed for reproducibility')
+    parser.add_argument('--fusion_mode', type=str, default='global_attention',
+                        choices=['static', 'global_attention', 'spatial_attention', 'glu', 'multiplicative', 'bilinear', 'legacy', 'original'],
+                        help='Fusion strategy: static, global_attention, spatial_attention, glu, multiplicative, bilinear, legacy (default: global_attention)')
+    parser.add_argument('--fusion_temperature', type=float, default=2.0,
+                        help='Temperature for attention-based fusion strategies (default: 2.0)')
     
     args = parser.parse_args()
     
@@ -917,6 +1016,8 @@ if __name__ == "__main__":
         'patience': 15,
         'scheduler': 'ReduceLROnPlateau',
         'seed': args.seed,
+        'fusion_mode': args.fusion_mode,
+        'fusion_temperature': args.fusion_temperature,
     }
     
     if args.task == 'all':

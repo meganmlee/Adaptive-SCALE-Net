@@ -32,7 +32,7 @@ scale_net_path = os.path.join(os.path.dirname(__file__), '..', '..', 'scale-net'
 sys.path.insert(0, scale_net_path)
 
 # Import from scale-net
-from train_scale_net import train_task, ChannelWiseSpectralCLDNN
+from train_scale_net import train_task, SCALENet
 from dataset import TASK_CONFIGS, load_dataset, create_dataloaders
 
 
@@ -64,7 +64,7 @@ def evaluate_with_metrics(model, loader, device, is_binary=False):
                 # Handle (x_time, x_spec) tuple
                 x_time, x_spec = inputs
                 x_time, x_spec = x_time.to(device), x_spec.to(device)
-                outputs = model(x_spec)  # ChannelWiseSpectralCLDNN only takes spectral input
+                outputs = model(x_spec)  # SCALENet only takes spectral input
             else:
                 inputs = inputs.to(device)
                 outputs = model(inputs)
@@ -452,7 +452,7 @@ def run_ablation(task: str, save_dir: str = './ablation_results',
             is_binary = (n_classes == 2)
             
             # Create model and load weights
-            eval_model = ChannelWiseSpectralCLDNN(
+            eval_model = SCALENet(
                 freq_bins=freq_bins,
                 time_bins=time_bins,
                 n_channels=n_channels,

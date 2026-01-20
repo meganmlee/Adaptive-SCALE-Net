@@ -1,8 +1,8 @@
 """
-ChannelWiseSpectralCLDNN - Baseline Model for Multi-Task EEG Classification
+SCALENet - Baseline Model for Multi-Task EEG Classification
 Supports: SSVEP, P300, MI (Motor Imagery), Imagined Speech
 
-Based on the working implementation from spectral_cnn_lstm notebooks
+Single-stream spectral (STFT) architecture
 """
 
 import torch
@@ -47,9 +47,10 @@ class SqueezeExcitation(nn.Module):
         y = self.excitation(y).view(b, c, 1, 1)
         return x * y.expand_as(x)
 
-class ChannelWiseSpectralCLDNN(nn.Module):
+class SCALENet(nn.Module):
     """
-    Channel-wise Spectral CNN-LSTM-DNN model
+    SCALE-Net: Channel-wise Spectral CNN-LSTM-DNN model
+    Single-stream architecture using STFT features
     """
     
     def __init__(self, freq_bins, time_bins, n_channels, n_classes, 
@@ -444,7 +445,7 @@ def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[st
     
     # ====== Create Model ======
     n_classes = config['n_classes']
-    model = ChannelWiseSpectralCLDNN(
+    model = SCALENet(
         freq_bins=freq_bins,
         time_bins=time_bins,
         n_channels=n_channels,
@@ -664,7 +665,7 @@ def train_model(config=None, model_path=None):
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description='Train ChannelWiseSpectralCLDNN on EEG tasks')
+    parser = argparse.ArgumentParser(description='Train SCALENet on EEG tasks')
     parser.add_argument('--task', type=str, default='SSVEP',
                         choices=['SSVEP', 'P300', 'MI', 'Imagined_speech', 'Lee2019_MI', 'Lee2019_SSVEP', 'BNCI2014_P300', 'BI2014b_P300', 'all'],
                         help='Task to train on (default: SSVEP)')

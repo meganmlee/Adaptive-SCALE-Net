@@ -23,7 +23,7 @@ if scale_net_path not in sys.path:
 # Import local modules from the scale_net folder
 from seed_utils import seed_everything
 from scale_net_adaptive import (
-    ChannelWiseSpectralCLDNN_Dual as BaseDualModel,
+    AdaptiveSCALENet as BaseDualModel,
     train_epoch, 
     evaluate
 )
