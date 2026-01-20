@@ -996,6 +996,15 @@ if __name__ == "__main__":
                         help='Fusion strategy: static, global_attention, spatial_attention, glu, multiplicative, bilinear, legacy (default: global_attention)')
     parser.add_argument('--fusion_temperature', type=float, default=2.0,
                         help='Temperature for attention-based fusion strategies (default: 2.0)')
+    # STFT parameters (optional - uses task defaults if not specified)
+    parser.add_argument('--stft_fs', type=int, default=None,
+                        help='STFT sampling frequency (Hz). If not specified, uses task default.')
+    parser.add_argument('--stft_nperseg', type=int, default=None,
+                        help='STFT window length (nperseg). If not specified, uses task default.')
+    parser.add_argument('--stft_noverlap', type=int, default=None,
+                        help='STFT overlap length (noverlap). If not specified, uses task default.')
+    parser.add_argument('--stft_nfft', type=int, default=None,
+                        help='STFT FFT length (nfft). If not specified, uses task default.')
     
     args = parser.parse_args()
     
@@ -1004,7 +1013,7 @@ if __name__ == "__main__":
         'num_epochs': args.epochs,
         'batch_size': args.batch_size,
         'lr': args.lr,
-        # STFT params will use task-specific defaults from TASK_CONFIGS
+        # STFT params will use task-specific defaults from TASK_CONFIGS if not provided
         'cnn_filters': 16,
         'lstm_hidden': 128,
         'pos_dim': 16,
@@ -1019,6 +1028,16 @@ if __name__ == "__main__":
         'fusion_mode': args.fusion_mode,
         'fusion_temperature': args.fusion_temperature,
     }
+    
+    # Add STFT config if provided (None values will use task defaults)
+    if args.stft_fs is not None:
+        config['stft_fs'] = args.stft_fs
+    if args.stft_nperseg is not None:
+        config['stft_nperseg'] = args.stft_nperseg
+    if args.stft_noverlap is not None:
+        config['stft_noverlap'] = args.stft_noverlap
+    if args.stft_nfft is not None:
+        config['stft_nfft'] = args.stft_nfft
     
     if args.task == 'all':
         results = train_all_tasks(save_dir=args.save_dir)

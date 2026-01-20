@@ -5,3 +5,4 @@ __pycache__/
 *.pyo
 /ablation/fusion_ablations/ablation_SSVEP/**
 /ablation/stft_params/ablation_results/**
+/scale-net/checkpoints/**
