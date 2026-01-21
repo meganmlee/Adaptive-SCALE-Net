@@ -642,8 +642,6 @@ def plot_spatial_attention_heatmap(task, stats, n_channels):
     filtered_weights = mean_weights[eeg_picks]
     filtered_info = mne.pick_info(info, sel=eeg_picks)
 
-    
-
     fig, ax = plt.subplots(figsize=(7, 7))
     im, _ = mne.viz.plot_topomap(
         filtered_weights, 
@@ -868,9 +866,9 @@ def run_ablation_study(task: str, config: Dict = None):
     print(df.to_string(index=False))
     
     # Find best strategy
-    best_idx = df['val_acc'].idxmax()
+    best_idx = df['test2_acc'].idxmax()
     best_strategy = df.loc[best_idx, 'strategy']
-    best_acc = df.loc[best_idx, 'val_acc']
+    best_acc = df.loc[best_idx, 'test2_acc']
     print(f"\n🏆 BEST STRATEGY: {best_strategy} ({best_acc:.2f}%)")
     
     # Plot modality contributions
