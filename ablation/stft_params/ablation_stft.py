@@ -28,12 +28,13 @@ from sklearn.metrics import f1_score, recall_score, roc_auc_score
 from tqdm import tqdm
 
 # Add scale-net directory to path
-scale_net_path = os.path.join(os.path.dirname(__file__), '..', '..', 'scale_net')
+scale_net_path = os.path.join(os.path.dirname(__file__), '..', '..', 'scale-net')
 sys.path.insert(0, scale_net_path)
 
 # Import from scale-net
 from train_scale_net import train_task, SCALENet
 from dataset import TASK_CONFIGS, load_dataset, create_dataloaders
+
 
 # ==================== Evaluation with Metrics ====================
 
@@ -343,35 +344,16 @@ def run_ablation(task: str, save_dir: str = './ablation_results',
     estimated_hours = len(param_settings) * epochs / 60  # Rough estimate
     print(f"Estimated time: ~{estimated_hours:.1f} hours (assuming {epochs} epochs per config)")
     print(f"{'='*80}")
-
-    # Save results
-    results_df = pd.DataFrame(results)
-    results_file = os.path.join(save_dir, f'{task.lower()}_stft_27_results.csv')
-    completed_configs = set()
-    if os.path.exists(results_file):
-        existing_df = pd.read_csv(results_file)
-        results = existing_df.to_dict('records')
-        completed_configs = set(existing_df['config_name'].tolist())
-        print(f"\n✓ Found existing results: {len(completed_configs)} configs already completed")
-        print(f"  Resuming from configuration {len(completed_configs)+1}/{len(param_settings)}")
-    else:
-        results = []
     
+    results = []
     best_acc = 0.0
     best_config = None
     
     for idx, stft_params in enumerate(param_settings, 1):
-
-        name = stft_params['name']
-        
-        # Skip if already completed
-        if name in completed_configs:
-            print(f"\nSkipping configuration {idx}/{len(param_settings)}: {name} (already completed)")
-            continue
-
         nperseg = stft_params['nperseg']
         noverlap = stft_params['noverlap']
         nfft = stft_params['nfft']
+        name = stft_params['name']
         overlap_ratio = stft_params['overlap_ratio']
         
         # Validate parameters
@@ -526,8 +508,6 @@ def run_ablation(task: str, save_dir: str = './ablation_results',
             }
             
             results.append(result)
-            results_df = pd.DataFrame(results)
-            results_df.to_csv(results_file, index=False)
             
             # Track best configuration
             current_acc = result['val_acc']
@@ -577,6 +557,12 @@ def run_ablation(task: str, save_dir: str = './ablation_results',
                 'nfft': nfft,
                 'error': str(e)
             })
+    
+    # Save results
+    results_df = pd.DataFrame(results)
+    results_file = os.path.join(save_dir, f'{task.lower()}_stft_27_results.csv')
+    results_df.to_csv(results_file, index=False)
+    print(f"\n✓ Results saved to: {results_file}")
     
     # Sort by validation accuracy
     successful_results = [r for r in results if 'error' not in r]
