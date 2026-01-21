@@ -299,7 +299,7 @@ def get_stft_param_settings(task: str) -> List[Dict]:
 # ==================== Ablation Study ====================
 
 def run_ablation(task: str, save_dir: str = './ablation_results',
-                             epochs: int = 30, batch_size: int = 16,
+                             epochs: int = 40, batch_size: int = 64,
                              seed: int = 44, verbose: bool = True) -> Dict:
     """
     Run STFT parameter ablation study for a task (27 settings)
@@ -392,9 +392,9 @@ def run_ablation(task: str, save_dir: str = './ablation_results',
             'use_hidden_layer': False,
             'hidden_dim': 64,
             # Training parameters
-            'lr': 1e-3,
+            'lr': 5e-4,
             'weight_decay': 1e-4,
-            'patience': 5,
+            'patience': 10,
             'scheduler': 'ReduceLROnPlateau',
         }
         
@@ -636,7 +636,7 @@ def run_ablation(task: str, save_dir: str = './ablation_results',
 
 def run_all_tasks_ablation(tasks: Optional[List[str]] = None,
                                save_dir: str = './ablation_results',
-                               epochs: int = 50, batch_size: int = 16,
+                               epochs: int = 50, batch_size: int = 64,
                                seed: int = 44) -> Dict:
     """
     Run STFT ablation study for all tasks (27 settings per task)
@@ -763,14 +763,14 @@ if __name__ == "__main__":
     parser.add_argument(
         '--epochs',
         type=int,
-        default=30,
-        help='Number of training epochs per configuration (default: 30)'
+        default=40,
+        help='Number of training epochs per configuration (default: 40)'
     )
     parser.add_argument(
         '--batch_size',
         type=int,
-        default=16,
-        help='Batch size (default: 16)'
+        default=64,
+        help='Batch size (default: 64)'
     )
     parser.add_argument(
         '--seed',

@@ -621,7 +621,7 @@ def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[st
             'stft_nfft': task_config.get('stft_nfft', 512),
             
             # Training
-            'batch_size': 16,
+            'batch_size': 64,
             'num_epochs': 100,
             'lr': 1e-3,
             'weight_decay': 1e-4,
@@ -687,7 +687,7 @@ def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[st
         stft_config, 
         batch_size=config['batch_size'],
         num_workers=4,
-        augment_train=True,
+        augment_train=config.get('augment_train', True),
         seed=seed,
     )
     
@@ -775,7 +775,8 @@ def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[st
     patience_counter = 0
     
     if model_path is None:
-        model_path = f'best_{task.lower()}_model.pth'
+        seed = config.get('seed', 44)
+        model_path = f'best_{task.lower()}_model_{seed}.pth'
     
     # Check if binary classification
     is_binary = (n_classes == 2)
@@ -902,24 +903,21 @@ def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[st
                 all_weights_array, 
                 columns=['Spectral_Weight', 'Temporal_Weight']
             )
-        else:
-            print(f"⚠ No attention weights collected (fusion mode may not support weights)")
-            weights_df = None
-        
-        # Generate filename based on model_path if available, otherwise use default
-        if model_path:
-            # Extract config name from model path if it follows the pattern
-            # e.g., "ssvep_stft_nperseg128_overlap50pct_nfft512_model.pth" -> "nperseg128_overlap50pct_nfft512"
-            import os
-            base_name = os.path.basename(model_path)
-            if '_stft_' in base_name and '_model.pth' in base_name:
-                config_part = base_name.split('_stft_')[1].replace('_model.pth', '')
-                csv_filename = f'{task.lower()}_attention_weights_{config_part}_{weights_type}.csv'
+            
+            # Generate filename based on model_path if available, otherwise use default
+            if model_path:
+                # Extract config name from model path if it follows the pattern
+                # e.g., "ssvep_stft_nperseg128_overlap50pct_nfft512_model.pth" -> "nperseg128_overlap50pct_nfft512"
+                import os
+                base_name = os.path.basename(model_path)
+                if '_stft_' in base_name and '_model.pth' in base_name:
+                    config_part = base_name.split('_stft_')[1].replace('_model.pth', '')
+                    csv_filename = f'{task.lower()}_attention_weights_{config_part}_{weights_type}.csv'
+                else:
+                    csv_filename = f'{task.lower()}_attention_weights_{weights_type}.csv'
             else:
                 csv_filename = f'{task.lower()}_attention_weights_{weights_type}.csv'
-        else:
-            csv_filename = f'{task.lower()}_attention_weights_{weights_type}.csv'
-        
+            
             weights_df.to_csv(csv_filename, index=False)
             
             # Calculate and print mean for sanity check
@@ -930,7 +928,7 @@ def train_task(task: str, config: Optional[Dict] = None, model_path: Optional[st
             print(f"  Mean Spectral Weight: {mean_spec:.4f}")
             print(f"  Mean Temporal Weight: {mean_time:.4f}")
         else:
-            print(f"⚠ Skipping attention weights save (no weights available)")
+            print(f"⚠ No attention weights collected (fusion mode may not support weights)")
 
     print(f"{'='*70}")
     
@@ -965,7 +963,8 @@ def train_all_tasks(tasks: Optional[list] = None, save_dir: str = './checkpoints
         print(f"{'='*60}")
         
         try:
-            model_path = os.path.join(save_dir, f'best_{task.lower()}_model.pth')
+            # Use default seed 44 for train_all_tasks
+            model_path = os.path.join(save_dir, f'best_{task.lower()}_model_44.pth')
             model, results = train_task(task, model_path=model_path)
             all_results[task] = results
             
@@ -1042,6 +1041,8 @@ if __name__ == "__main__":
                         help='STFT overlap length (noverlap). If not specified, uses task default.')
     parser.add_argument('--stft_nfft', type=int, default=None,
                         help='STFT FFT length (nfft). If not specified, uses task default.')
+    parser.add_argument('--no_augment', action='store_true',
+                        help='Disable train-time augmentation (default: augmentation ON).')
     
     args = parser.parse_args()
     
@@ -1065,6 +1066,9 @@ if __name__ == "__main__":
         'fusion_mode': args.fusion_mode,
         'fusion_temperature': args.fusion_temperature,
     }
+
+    # Train-time augmentation toggle
+    config['augment_train'] = (not args.no_augment)
     
     # Add STFT config if provided (None values will use task defaults)
     if args.stft_fs is not None:
@@ -1079,6 +1083,7 @@ if __name__ == "__main__":
     if args.task == 'all':
         results = train_all_tasks(save_dir=args.save_dir)
     else:
-        model_path = os.path.join(args.save_dir, f'best_{args.task.lower()}_model.pth')
+        seed = config.get('seed', 44)
+        model_path = os.path.join(args.save_dir, f'best_{args.task.lower()}_model_{seed}.pth')
         os.makedirs(args.save_dir, exist_ok=True)
         model, results = train_task(args.task, config=config, model_path=model_path)
